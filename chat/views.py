@@ -8,22 +8,34 @@ from django.views.decorators.csrf import csrf_exempt
 from .serializers import ChatSerializer
 from supabase import create_client, Client
 from transformers import TFAutoModel, AutoTokenizer
+from transformers import LongformerTokenizer, TFLongformerModel
 import numpy as np
+import nltk
+from nltk import sent_tokenize
+nltk.download("punkt")
 
 openai.api_key = "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"
-
 SUPABASE_URL="https://xmfuzxgxaqmfwfzphfuk.supabase.co"
 SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhtZnV6eGd4YXFtZndmenBoZnVrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MjIxMjk0OTMsImV4cCI6MjAzNzcwNTQ5M30.TWRjlbLczM3t48dmn80OQH8yH628jx46q3rwo1ds_cc"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-model_name = "distilbert-base-uncased"
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-model = TFAutoModel.from_pretrained(model_name)
+tokenizer = LongformerTokenizer.from_pretrained("allenai/longformer-base-4096")
+model = TFLongformerModel.from_pretrained("allenai/longformer-base-4096")
+
+def separar_texto(texto):
+    return sent_tokenize(texto)
 
 def vectorizar_texto(texto):
-    inputs = tokenizer(texto, return_tensors="tf")
-    outputs = model(inputs)
-    return outputs.last_hidden_state.numpy().mean(axis=1).tolist()[0]
+    oraciones = separar_texto(texto)
+    vectores = []
+
+    for oracion in oraciones:
+        inputs = tokenizer(oracion, return_tensors="tf", max_length=4096, truncation=True)
+        outputs = model(inputs)
+        vectores.append(outputs.last_hidden_state.numpy().mean(axis=1).tolist()[0])
+
+    vector_combinado = np.mean(vectores, axis=0)
+    return vector_combinado
 
 def almacenar_prompt(ruc, prompt, supabase):
     vector = vectorizar_texto(prompt)
@@ -65,8 +77,7 @@ def read_jrxml_file(request, ruc):
             
         DE_FAC1_content = jrxml_content
         data = serializer.validated_data
-        prompt = data['prompt']
-        
+        prompt = data['prompt']       
         # Almacenar el vector del prompt en Supabase usando el RUC
         almacenar_prompt(ruc, prompt, supabase)
 
@@ -74,25 +85,24 @@ def read_jrxml_file(request, ruc):
         vectores_almacenados = recuperar_vectores_prompt(ruc, supabase)
         nuevo_vector = vectorizar_texto(prompt)
         textos_similares = encontrar_vectores_similares(nuevo_vector, vectores_almacenados)
-
-        # Crear el mensaje de contexto
         mensaje_contexto = " ".join(textos_similares)
-        
+
+        parrafos = separar_texto(prompt)
         reference_data = {
             "#El contexto principal será el {DE_FAC1_content}.",
             "#No añadirás ningún parámetro, field o variable al jrxml de referencia, siempre seguirás la misma estructura.",
             "#Devolverás como respuesta algunas guías de como añadir algo solicitado y luego la sección del jrxml solicitado por el usuario, no hagas toda la estructura del jrxml solo la pequeña porción de código.",
             "#Puedes indicar algunas opciones para poder modificar o añadir algo en el reporte y luego con la estructura del código jrxml de referencia: {DE_FAC1_content} y la solicitud del usuario sin afectar la estructura general."
         }
-        
-        response = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": f"Eres un experto programador en generación de reportes en Jaspersoft Studio 6.19, siempre respondes en español. Tu referencia será el siguiente archivo JRXML: {DE_FAC1_content} y más detalles con {reference_data}"},
-                {"role": "user", "content": prompt}
-            ],
-            stream=True
-        )
+        for parrafo in parrafos:
+            response = openai.ChatCompletion.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": f"Eres un experto programador en generación de reportes en Jaspersoft Studio 6.19, siempre respondes en español. Tu referencia será el siguiente archivo JRXML: {DE_FAC1_content} y más detalles con {reference_data}"},
+                    {"role": "user", "content": parrafo + "\n\nContexto relevante: " + mensaje_contexto}
+                ],
+                stream=True
+            )
         recolectar_mensaje = []
         for chunk in response:
             if "choices" in chunk:
