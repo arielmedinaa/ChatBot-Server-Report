@@ -7,7 +7,7 @@ from rest_framework import status
 from django.views.decorators.csrf import csrf_exempt
 from .serializers import ChatSerializer
 from supabase import create_client, Client
-from transformers import TFAutoModel, AutoTokenizer
+#from transformers import TFAutoModel, AutoTokenizer
 from transformers import LongformerTokenizer, TFLongformerModel
 import numpy as np
 import nltk
@@ -38,7 +38,7 @@ def vectorizar_texto(texto):
     return vector_combinado
 
 def almacenar_prompt(ruc, prompt, supabase):
-    vector = vectorizar_texto(prompt)
+    vector = vectorizar_texto(prompt).tolist()
     data = {
         "ruc": ruc,
         "prompt": prompt,
@@ -67,7 +67,6 @@ def encontrar_vectores_similares(nuevo_vector, vectores_almacenados, umbral=0.8)
 @api_view(['POST'])
 @csrf_exempt
 def read_jrxml_file(request, ruc):
-    print(request.data)
     serializer = ChatSerializer(data=request.data)
     if serializer.is_valid():
         BASE_DIR =os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -85,7 +84,7 @@ def read_jrxml_file(request, ruc):
         vectores_almacenados = recuperar_vectores_prompt(ruc, supabase)
         nuevo_vector = vectorizar_texto(prompt)
         textos_similares = encontrar_vectores_similares(nuevo_vector, vectores_almacenados)
-        mensaje_contexto = " ".join(textos_similares)
+        #mensaje_contexto = " ".join(textos_similares)
 
         parrafos = separar_texto(prompt)
         reference_data = {
@@ -99,7 +98,7 @@ def read_jrxml_file(request, ruc):
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": f"Eres un experto programador en generación de reportes en Jaspersoft Studio 6.19, siempre respondes en español. Tu referencia será el siguiente archivo JRXML: {DE_FAC1_content} y más detalles con {reference_data}"},
-                    {"role": "user", "content": parrafo + "\n\nContexto relevante: " + mensaje_contexto}
+                    {"role": "user", "content": parrafo}
                 ],
                 stream=True
             )
@@ -112,7 +111,6 @@ def read_jrxml_file(request, ruc):
                             chunk_messages = choice["delta"]["content"]
                             recolectar_mensaje.append(chunk_messages)
         combined_message = recolectar_mensaje
-        print(combined_message)
         return HttpResponse(combined_message, content_type="text/plain")
             
     return Response({'message': 'Error al validar datos, verificarlo'}, status=status.HTTP_400_BAD_REQUEST)
